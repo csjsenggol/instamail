@@ -20,8 +20,11 @@ A Flask web application for creating and managing temporary email accounts using
 
 - Create temporary email accounts
 - View incoming messages
+- Shared account persistence using SQLite (`accounts.db`)
 - Simple web interface
 
 ## Note
 
 This app uses the mail.tm service for temporary emails. Accounts are "permanent" but may be deleted by the service.
+
+For production on Render, attach a persistent disk and set `ACCOUNTS_DB_PATH` (example: `/var/data/accounts.db`) so account data survives deploys/restarts.
