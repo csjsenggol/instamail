@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instamail - Temporary Email Service</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Left Sidebar -->
+            <div class="col-lg-4 col-xl-3">
+                <div class="card mt-5 me-3">
+                    <div class="card-header bg-primary text-white">
+                        <h1 class="card-title h4 mb-0"><i class="fas fa-envelope me-2"></i>Instamail</h1>
+                    </div>
+                    <div class="card-body">
+                        {% if error %}
+                        <div class="alert alert-danger" role="alert">
+                            {{ error }}
+                        </div>
+                        {% endif %}
+                        <form action="/create_account" method="post">
+                            <div class="mb-3">
+                                <label for="domain" class="form-label fw-bold">Domain</label>
+                                <select name="domain" id="domain" class="form-select">
+                                    {% for domain in domains %}
+                                    <option value="{{ domain }}">{{ domain }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="username" class="form-label fw-bold">Username</label>
+                                <input type="text" name="username" id="username" class="form-control" placeholder="Enter username" required>
+                            </div>
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-plus-circle me-2"></i>Create Account
+                                </button>
+                            </div>
+                        </form>
+
+                        {% if accounts %}
+                        <hr class="my-4">
+                        <div class="account-info">
+                            <h5 class="mb-3">Accounts</h5>
+                            <div class="list-group">
+                                {% for acc in accounts %}
+                                <div class="list-group-item list-group-item-action {% if acc.email == active_email %}active{% endif %}" role="button" onclick="window.location.href='/?active={{ acc.email }}'" style="cursor: pointer;">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <div class="fw-bold">{{ acc.email }}</div>
+                                            <small class="text-white-50">Temporary</small>
+                                        </div>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary copy-btn" onclick="copyEmail(event, '{{ acc.email }}')" title="Copy email">
+                                                <i class="fas fa-copy"></i>
+                                            </button>
+                                            {% if acc.email == active_email %}
+                                            <span class="badge bg-light text-dark">Active</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            <div class="d-flex gap-1 mt-3">
+                                <button class="btn btn-sm btn-outline-primary flex-fill" onclick="location.reload()" title="Refresh accounts">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="col-lg-8 col-xl-9">
+                <div class="inbox-panel mt-5">
+                    {% if active_email %}
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <small class="text-muted">{{ messages|length if messages else 0 }} messages</small>
+                    </div>
+
+                    {% if messages %}
+                    <div class="inbox-content">
+                        <form action="/messages/action" method="post" id="messageActions">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <div>
+                                <button type="submit" name="action" value="delete" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete selected messages?');">
+                                    <i class="fas fa-trash me-1"></i>Delete
+                                </button>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="selectAll" onchange="toggleAll(this)">
+                                <label class="form-check-label" for="selectAll">Select all</label>
+                            </div>
+                        </div>
+
+                        <div class="email-list">
+                            {% for msg in messages %}
+                            <div class="email-item border-bottom">
+                                <div class="d-flex align-items-center p-3">
+                                    <div class="form-check me-3">
+                                        <input class="form-check-input" type="checkbox" name="message_ids" value="{{ msg['id'] }}" id="check{{ loop.index }}">
+                                    </div>
+                                    <div class="star me-3">
+                                        <i class="far fa-star text-muted"></i>
+                                    </div>
+                                    <div class="sender flex-grow-1 me-3">
+                                        <span class="fw-bold">{{ msg['from']['name'] or msg['from']['address'] }}</span><br>
+                                        <span class="text-muted small">{{ msg['from']['address'] }}</span>
+                                        <div class="badge bg-secondary mt-1">{{ msg.account }}</div>
+                                    </div>
+                                    <div class="subject flex-grow-1 me-3">
+                                        <span class="fw-medium">{{ msg['subject'] }}</span>
+                                        {% if msg.snippet %}
+                                        <div class="text-muted small mt-1">{{ msg.snippet }}</div>
+                                        {% endif %}
+                                    </div>
+                                    <div class="d-flex flex-column align-items-end text-end">
+                                        <div class="mb-1">
+                                            {% if msg.otp %}
+                                            <span class="badge bg-secondary me-2">OTP: {{ msg.otp }}</span>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyEmail(event, '{{ msg.otp }}')" title="Copy OTP">
+                                                <i class="fas fa-copy"></i>
+                                            </button>
+                                            {% else %}
+                                            <span class="badge bg-dark text-white-50 me-2">No OTP</span>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="No OTP detected">
+                                                <i class="fas fa-copy"></i>
+                                            </button>
+                                            {% endif %}
+                                        </div>
+                                        <div class="date text-muted small">
+                                            {{ msg.formatted_date or msg['createdAt'] }}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="card card-body bg-dark text-white border-0">
+                                    <div class="mb-2">
+                                        <strong>From:</strong> {{ msg['from']['name'] or msg['from']['address'] }}<br>
+                                        <strong>To:</strong> {{ msg['to'][0]['address'] if msg['to'] }}<br>
+                                        <strong>Date:</strong> {{ msg.formatted_date or msg['createdAt'] }}
+                                    </div>
+                                    <hr class="border-secondary">
+                                    <div class="message-body">
+                                        {{ msg['text'] | safe }}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        </form>
+                    </div>
+                    {% else %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-envelope-open fa-4x text-white-50 mb-4"></i>
+                        <h4 class="text-white mb-2">Your inbox is empty</h4>
+                        <p class="text-white-75">Messages sent to {{ active_email }} will appear here</p>
+                    </div>
+                    {% endif %}
+                </div>
+                {% else %}
+                <div class="mt-5 text-center">
+                    <i class="fas fa-envelope fa-5x text-white-50 mb-4"></i>
+                    <h3 class="text-white mb-3">Welcome to Instamail</h3>
+                    <p class="text-white-75 fs-5">Create a temporary email account to get started</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleAll(master) {
+            const checks = document.querySelectorAll('input[name="message_ids"]');
+            checks.forEach(c => c.checked = master.checked);
+        }
+
+        function copyEmail(evt, email) {
+            evt.stopPropagation();
+            evt.preventDefault();
+
+            navigator.clipboard.writeText(email)
+                .then(() => {
+                    const button = evt.target.closest('button');
+                    if (!button) return;
+                    const originalHtml = button.innerHTML;
+                    button.innerHTML = '<i class="fas fa-check"></i>';
+                    setTimeout(() => button.innerHTML = originalHtml, 1000);
+                })
+                .catch(() => {
+                    alert('Copy failed. Please copy manually.');
+                });
+        }
+    </script>
+</body>
+</html>

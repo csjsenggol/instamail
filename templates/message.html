@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instamail - View Message</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-lg-4 col-xl-3">
+                <div class="card mt-5 me-3">
+                    <div class="card-header bg-primary text-white">
+                        <h1 class="card-title h4 mb-0"><i class="fas fa-envelope me-2"></i>Instamail</h1>
+                    </div>
+                    <div class="card-body">
+                        <a href="/" class="btn btn-outline-secondary w-100 mb-3"><i class="fas fa-arrow-left me-2"></i>Back to Inbox</a>
+                        <div class="account-info">
+                            <div class="d-flex align-items-center mb-2">
+                                <i class="fas fa-user-circle fa-2x text-primary me-3"></i>
+                                <div>
+                                    <div class="fw-bold">{{ active_email }}</div>
+                                    <small class="text-muted">Temporary Account</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-8 col-xl-9">
+                <div class="mt-5">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="h5 mb-0">{{ message.subject or '(No Subject)' }}</h2>
+                            <div class="text-muted small">From: {{ message.from.address }} | To: {{ message.to[0].address if message.to }} | {{ message.formatted_date or message.createdAt }}</div>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <strong>From:</strong> {{ message.from.name or message.from.address }}<br>
+                                <strong>To:</strong> {{ message.to[0].address if message.to }}<br>
+                                <strong>Date:</strong> {{ message.formatted_date or message.createdAt }}
+                            </div>
+
+                            {% if otp_code %}
+                            <div class="mb-3">
+                                <span class="badge bg-secondary me-2">OTP: {{ otp_code }}</span>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyText('{{ otp_code }}')">
+                                    <i class="fas fa-copy"></i> Copy OTP
+                                </button>
+                            </div>
+                            {% endif %}
+
+                            <hr>
+                            <div class="message-body">
+                                {{ message.text | safe }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function copyText(text) {
+            navigator.clipboard.writeText(text)
+                .then(() => {
+                    const toast = document.createElement('div');
+                    toast.className = 'toast align-items-center text-bg-success border-0 position-fixed bottom-0 end-0 m-3';
+                    toast.setAttribute('role', 'status');
+                    toast.setAttribute('aria-live', 'polite');
+                    toast.innerHTML = '<div class="d-flex"><div class="toast-body">Copied to clipboard</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>';
+                    document.body.appendChild(toast);
+                    const bsToast = new bootstrap.Toast(toast, { delay: 1400 });
+                    bsToast.show();
+                })
+                .catch(() => {
+                    alert('Copy failed. Please copy manually.');
+                });
+        }
+    </script>
+</body>
+</html>
