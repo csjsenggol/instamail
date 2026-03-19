@@ -35,52 +35,101 @@ app.jinja_env.globals['build_url'] = build_url
 
 def get_domain_label(domain_obj):
     """Safely extract domain label, handling both clean dicts and stringified representations."""
-    if isinstance(domain_obj, dict):
-        return domain_obj.get('label') or domain_obj.get('domain') or ''
+    def parse_dictish(value):
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            raw_value = value.strip()
+            if raw_value.startswith('{') and raw_value.endswith('}'):
+                try:
+                    parsed = ast.literal_eval(raw_value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    return None
+        return None
 
-    if isinstance(domain_obj, str):
-        raw = domain_obj.strip()
-        if raw.startswith('{') and raw.endswith('}'):
-            try:
-                parsed = ast.literal_eval(raw)
-                if isinstance(parsed, dict):
-                    return parsed.get('label') or parsed.get('domain') or raw
-            except Exception:
-                pass
-        return raw
+    payload = parse_dictish(domain_obj)
+    if payload:
+        # Handle nested dirty payloads where label/domain itself is another dict string.
+        nested = parse_dictish(payload.get('label')) or parse_dictish(payload.get('domain'))
+        if nested:
+            payload = nested
 
-    return str(domain_obj)
+        label = payload.get('label')
+        if isinstance(label, str):
+            clean_label = label.strip()
+            if clean_label and not clean_label.startswith('{'):
+                return clean_label
+
+        domain = payload.get('domain')
+        if isinstance(domain, str):
+            clean_domain = domain.strip()
+            if clean_domain:
+                return clean_domain
+
+        value = payload.get('value')
+        if isinstance(value, str):
+            clean_value = value.strip()
+            if '::' in clean_value:
+                return clean_value.split('::', 1)[1].strip()
+            if clean_value and not clean_value.startswith('{'):
+                return clean_value
+
+    raw = str(domain_obj).strip()
+    domain_match = re.search(r"([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)", raw)
+    if domain_match:
+        return domain_match.group(1)
+    return raw
 
 def get_domain_value(domain_obj):
     """Safely extract domain value (provider::domain), handling both clean dicts and stringified representations."""
-    if isinstance(domain_obj, dict):
-        value = domain_obj.get('value')
-        if value:
+    def parse_dictish(value):
+        if isinstance(value, dict):
             return value
-        provider = domain_obj.get('provider')
-        domain = domain_obj.get('domain')
-        if provider and domain:
-            return f"{provider}::{domain}"
-        return ''
+        if isinstance(value, str):
+            raw_value = value.strip()
+            if raw_value.startswith('{') and raw_value.endswith('}'):
+                try:
+                    parsed = ast.literal_eval(raw_value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    return None
+        return None
 
-    if isinstance(domain_obj, str):
-        raw = domain_obj.strip()
-        if raw.startswith('{') and raw.endswith('}'):
-            try:
-                parsed = ast.literal_eval(raw)
-                if isinstance(parsed, dict):
-                    value = parsed.get('value')
-                    if value:
-                        return value
-                    provider = parsed.get('provider')
-                    domain = parsed.get('domain')
-                    if provider and domain:
-                        return f"{provider}::{domain}"
-            except Exception:
-                pass
-        return raw
+    payload = parse_dictish(domain_obj)
+    if payload:
+        # Handle nested dirty payloads where value/domain is another dict string.
+        nested = parse_dictish(payload.get('value')) or parse_dictish(payload.get('domain'))
+        if nested:
+            payload = nested
 
-    return str(domain_obj)
+        value = payload.get('value')
+        if isinstance(value, str):
+            clean_value = value.strip()
+            if '::' in clean_value:
+                return clean_value
+
+        provider = payload.get('provider')
+        domain = payload.get('domain')
+        if isinstance(provider, str) and isinstance(domain, str):
+            clean_provider = provider.strip()
+            clean_domain = domain.strip()
+            if clean_provider and clean_domain:
+                return f"{clean_provider}::{clean_domain}"
+
+    raw = str(domain_obj).strip()
+    explicit_match = re.search(r"([a-zA-Z0-9_-]+)::([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)", raw)
+    if explicit_match:
+        return f"{explicit_match.group(1)}::{explicit_match.group(2)}"
+
+    domain_match = re.search(r"([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)", raw)
+    if domain_match:
+        inferred_provider = 'mailinator' if 'mailinator' in raw.lower() else 'mailtm'
+        return f"{inferred_provider}::{domain_match.group(1)}"
+
+    return raw
 
 
 def normalize_selected_domain(selected_domain):
@@ -246,6 +295,20 @@ def save_account(email, password, provider='mailtm'):
         pass
 
 
+def delete_account(email, provider='mailtm'):
+    """Delete one account from the DB by provider+email."""
+    if not email:
+        return
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                "DELETE FROM accounts WHERE email = ? AND provider = ?",
+                (email, normalize_provider(provider)),
+            )
+    except Exception:
+        pass
+
+
 def merge_account_lists(preferred_accounts, fallback_accounts):
     """Merge account lists by email, keeping preferred order and removing duplicates."""
     merged = []
@@ -325,6 +388,23 @@ def parse_message_datetime(value):
 
     return None
 
+
+def deleted_message_key(provider_id, email, message_id):
+    return f"{normalize_provider(provider_id)}::{email}::{message_id}"
+
+
+def parse_message_ref(value):
+    """Parse checkbox payload: provider|email|message_id."""
+    if not value or '|' not in value:
+        return None, None, None
+    provider_id, email, message_id = value.split('|', 2)
+    provider_id = normalize_provider(provider_id.strip())
+    email = email.strip()
+    message_id = message_id.strip()
+    if not email or not message_id:
+        return None, None, None
+    return provider_id, email, message_id
+
 class MailProvider:
     def __init__(self, provider_id='mailtm'):
         self.provider_id = normalize_provider(provider_id)
@@ -350,8 +430,65 @@ class MailProvider:
     def get_domains(self):
         """Fetch the list of active domains."""
         if self.provider_type == 'mailinator':
-            domains = [d.strip() for d in os.getenv('MAILINATOR_DOMAINS', 'mailinator.com').split(',')]
-            return [d for d in domains if d]
+            raw = os.getenv('MAILINATOR_DOMAINS', 'mailinator.com').strip()
+
+            def extract_domain(entry):
+                if isinstance(entry, dict):
+                    domain = entry.get('domain')
+                    if isinstance(domain, str) and domain.strip():
+                        return domain.strip()
+
+                    value = entry.get('value')
+                    if isinstance(value, str) and '::' in value:
+                        return value.split('::', 1)[1].strip()
+                    return None
+
+                if isinstance(entry, str):
+                    candidate = entry.strip().strip('"').strip("'")
+                    if not candidate:
+                        return None
+                    if '::' in candidate:
+                        return candidate.split('::', 1)[1].strip()
+                    return candidate
+
+                return None
+
+            parsed_domains = []
+
+            # Support env values like:
+            # - mailinator.com,mailinator.us
+            # - [{"domain": "mailinator.com"}]
+            # - {"value": "mailinator::mailinator.com", "domain": "mailinator.com"}
+            if raw.startswith('[') or raw.startswith('{'):
+                try:
+                    parsed = ast.literal_eval(raw)
+                    if isinstance(parsed, list):
+                        for item in parsed:
+                            domain = extract_domain(item)
+                            if domain:
+                                parsed_domains.append(domain)
+                    else:
+                        domain = extract_domain(parsed)
+                        if domain:
+                            parsed_domains.append(domain)
+                except Exception:
+                    # Fall back to CSV parsing for malformed literals.
+                    pass
+
+            if not parsed_domains:
+                for item in raw.split(','):
+                    domain = extract_domain(item)
+                    if domain:
+                        parsed_domains.append(domain)
+
+            seen = set()
+            unique_domains = []
+            for d in parsed_domains:
+                if d not in seen:
+                    seen.add(d)
+                    unique_domains.append(d)
+
+            return unique_domains or ['mailinator.com']
 
         response = self.session.get(f"{self.base_url}/domains", timeout=10)
         if response.status_code != 200:
@@ -576,9 +713,9 @@ def index():
     just_created = request.args.get('created') == '1'
     account_exists_notice = request.args.get('exists') == '1'
     error = None
-    inbox_scope = (request.args.get('scope') or 'active').lower()
-    if inbox_scope not in ('active', 'all'):
-        inbox_scope = 'active'
+    # Unified mode: always aggregate all accounts in one inbox view.
+    inbox_scope = 'all'
+    deleted_refs = set(session.get('deleted_message_refs', []))
 
     # Ensure session state for multiple accounts
     if 'accounts' not in session:
@@ -641,13 +778,6 @@ def index():
     if just_created:
         # Prioritize immediate sidebar/account rendering after create.
         accounts_to_fetch = []
-    if inbox_scope == 'active':
-        active_account = next(
-            (a for a in session.get('accounts', []) if isinstance(a, dict) and a.get('email') == active_email),
-            None,
-        )
-        if not just_created:
-            accounts_to_fetch = [active_account] if active_account else []
 
     # Show all messages from all accounts together, but keep the active account selected in the sidebar.
     for account in accounts_to_fetch:
@@ -698,6 +828,12 @@ def index():
             # Tag message with its account so user can see which inbox it came from
             msg['account'] = account_email
             msg['account_provider'] = provider_name(account_provider)
+            msg['account_provider_id'] = account_provider
+
+            # Skip messages deleted by user locally (or not deletable remotely).
+            ref_key = deleted_message_key(account_provider, account_email, msg.get('id'))
+            if ref_key in deleted_refs:
+                continue
 
             formatted_msgs.append(msg)
 
@@ -919,28 +1055,84 @@ def create_account():
 def messages_action():
     """Perform bulk actions on messages (delete)."""
     action = request.form.get('action')
-    message_ids = request.form.getlist('message_ids')
-    active_email = session.get('active_email')
-    if not active_email or not message_ids:
-        return redirect(url_for('index'))
-
-    active_account = next((a for a in session.get('accounts', []) if a['email'] == active_email), None)
-    if not active_account:
-        return redirect(url_for('index'))
-
-    provider_id = normalize_provider(active_account.get('provider'))
-    cache_key = account_cache_key(provider_id, active_email)
-    mail = MailProvider(provider_id)
-    token = mail.get_token(active_account['email'], active_account['password'])
-    if not token:
+    message_refs = request.form.getlist('message_refs')
+    if not message_refs:
         return redirect(url_for('index'))
 
     if action == 'delete':
-        for mid in message_ids:
-            mail.delete_message(token, mid)
-            if cache_key in MESSAGE_CACHE:
-                MESSAGE_CACHE[cache_key] = [m for m in MESSAGE_CACHE[cache_key] if m.get('id') != mid]
+        deleted_refs = set(session.get('deleted_message_refs', []))
+        session_accounts = session.get('accounts', [])
 
+        for ref in message_refs:
+            provider_id, email, message_id = parse_message_ref(ref)
+            if not provider_id or not email or not message_id:
+                continue
+
+            # Always hide deleted messages locally, including providers that don't support remote delete.
+            deleted_refs.add(deleted_message_key(provider_id, email, message_id))
+
+            account = next(
+                (
+                    a for a in session_accounts
+                    if normalize_provider(a.get('provider')) == provider_id and a.get('email') == email
+                ),
+                None,
+            )
+
+            if account:
+                token = MailProvider(provider_id).get_token(account['email'], account['password'])
+                if token:
+                    MailProvider(provider_id).delete_message(token, message_id)
+
+            cache_key = account_cache_key(provider_id, email)
+            if cache_key in MESSAGE_CACHE:
+                MESSAGE_CACHE[cache_key] = [
+                    m for m in MESSAGE_CACHE[cache_key]
+                    if str(m.get('id')) != str(message_id)
+                ]
+
+        session['deleted_message_refs'] = list(deleted_refs)
+        session.modified = True
+
+    return redirect(url_for('index'))
+
+
+@app.route('/accounts/remove', methods=['POST'])
+def remove_account():
+    """Remove an existing email account from sidebar and storage."""
+    email = (request.form.get('email') or '').strip()
+    provider_id = normalize_provider((request.form.get('provider') or '').strip())
+    if not email:
+        return redirect(url_for('index'))
+
+    session_accounts = session.get('accounts', [])
+    session['accounts'] = [
+        a for a in session_accounts
+        if not (
+            a.get('email') == email and normalize_provider(a.get('provider')) == provider_id
+        )
+    ]
+
+    global PERSISTENT_ACCOUNTS
+    PERSISTENT_ACCOUNTS = [
+        a for a in PERSISTENT_ACCOUNTS
+        if not (
+            a.get('email') == email and normalize_provider(a.get('provider')) == provider_id
+        )
+    ]
+
+    # Keep active_email valid after removal.
+    if session.get('active_email') == email:
+        session['active_email'] = session['accounts'][0]['email'] if session.get('accounts') else None
+
+    # Purge cached messages for removed account.
+    cache_key = account_cache_key(provider_id, email)
+    MESSAGE_CACHE.pop(cache_key, None)
+
+    # Remove persisted DB row.
+    delete_account(email, provider_id)
+
+    session.modified = True
     return redirect(url_for('index'))
 
 @app.route('/message/<message_id>')
