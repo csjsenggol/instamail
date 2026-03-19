@@ -32,6 +32,23 @@ def build_url(**kwargs):
 
 app.jinja_env.globals['build_url'] = build_url
 
+def get_domain_label(domain_obj):
+    """Safely extract domain label, handling both clean dicts and stringified representations."""
+    if isinstance(domain_obj, dict):
+        return domain_obj.get('label', '')
+    # Fallback for stringified dicts or other malformed input
+    return str(domain_obj)
+
+def get_domain_value(domain_obj):
+    """Safely extract domain value (provider::domain), handling both clean dicts and stringified representations."""
+    if isinstance(domain_obj, dict):
+        return domain_obj.get('value', '')
+    # Fallback for stringified dicts or other malformed input
+    return str(domain_obj)
+
+app.jinja_env.filters['domain_label'] = get_domain_label
+app.jinja_env.filters['domain_value'] = get_domain_value
+
 # Rate limiting: track account creation attempts per session
 ACCOUNT_CREATION_COOLDOWN = 2  # seconds between account creation attempts
 LAST_ACCOUNT_CREATION = {}  # {session_id: timestamp}
