@@ -376,13 +376,17 @@ def parse_message_datetime(value):
         return None
 
     try:
-        return datetime.datetime.fromisoformat(text.replace('Z', '+00:00'))
+        parsed = datetime.datetime.fromisoformat(text.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed.astimezone(datetime.timezone.utc)
     except Exception:
         pass
 
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
         try:
-            return datetime.datetime.strptime(text, fmt)
+            parsed = datetime.datetime.strptime(text, fmt)
+            return parsed.replace(tzinfo=datetime.timezone.utc)
         except Exception:
             continue
 
@@ -847,7 +851,7 @@ def index():
     # Sort the combined inbox by date (most recent first)
     def _msg_date(m):
         parsed = parse_message_datetime(m.get('createdAt'))
-        return parsed if parsed else datetime.datetime.min
+        return parsed if parsed else datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
 
     messages.sort(key=_msg_date, reverse=True)
 
