@@ -1,4 +1,5 @@
 import datetime
+import ast
 import json
 import math
 import os
@@ -35,15 +36,50 @@ app.jinja_env.globals['build_url'] = build_url
 def get_domain_label(domain_obj):
     """Safely extract domain label, handling both clean dicts and stringified representations."""
     if isinstance(domain_obj, dict):
-        return domain_obj.get('label', '')
-    # Fallback for stringified dicts or other malformed input
+        return domain_obj.get('label') or domain_obj.get('domain') or ''
+
+    if isinstance(domain_obj, str):
+        raw = domain_obj.strip()
+        if raw.startswith('{') and raw.endswith('}'):
+            try:
+                parsed = ast.literal_eval(raw)
+                if isinstance(parsed, dict):
+                    return parsed.get('label') or parsed.get('domain') or raw
+            except Exception:
+                pass
+        return raw
+
     return str(domain_obj)
 
 def get_domain_value(domain_obj):
     """Safely extract domain value (provider::domain), handling both clean dicts and stringified representations."""
     if isinstance(domain_obj, dict):
-        return domain_obj.get('value', '')
-    # Fallback for stringified dicts or other malformed input
+        value = domain_obj.get('value')
+        if value:
+            return value
+        provider = domain_obj.get('provider')
+        domain = domain_obj.get('domain')
+        if provider and domain:
+            return f"{provider}::{domain}"
+        return ''
+
+    if isinstance(domain_obj, str):
+        raw = domain_obj.strip()
+        if raw.startswith('{') and raw.endswith('}'):
+            try:
+                parsed = ast.literal_eval(raw)
+                if isinstance(parsed, dict):
+                    value = parsed.get('value')
+                    if value:
+                        return value
+                    provider = parsed.get('provider')
+                    domain = parsed.get('domain')
+                    if provider and domain:
+                        return f"{provider}::{domain}"
+            except Exception:
+                pass
+        return raw
+
     return str(domain_obj)
 
 app.jinja_env.filters['domain_label'] = get_domain_label
