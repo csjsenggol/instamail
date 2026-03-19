@@ -468,6 +468,18 @@ def get_combined_domains(force_refresh=False):
             provider_domains = []
 
         for domain in provider_domains:
+            # Production-safe normalization: some providers/deploys may return
+            # dict objects instead of raw domain strings.
+            if isinstance(domain, dict):
+                domain = domain.get('domain') or domain.get('value') or domain.get('label')
+                if isinstance(domain, str) and '::' in domain:
+                    domain = domain.split('::', 1)[1]
+            if not isinstance(domain, str):
+                continue
+            domain = domain.strip()
+            if not domain:
+                continue
+
             domains.append(
                 {
                     'value': f"{provider_id}::{domain}",
@@ -680,7 +692,9 @@ def create_account_json():
         return jsonify({'success': False, 'error': 'Invalid domain selection.'}), 400
 
     provider_id, domain = selected_domain.split('::', 1)
-    provider_id = normalize_provider(provider_id)
+    provider_id = provider_id.strip()
+    if provider_id not in MAIL_PROVIDERS:
+        return jsonify({'success': False, 'error': 'Invalid provider selection. Refresh and choose a domain again.'}), 400
 
     username = request.form.get('username', '').strip()
     if not username:
@@ -754,11 +768,14 @@ def create_account():
 
     selected_domain = request.form.get('domain', '')
     if '::' not in selected_domain:
-        domains = get_combined_domains()
+        domains = get_combined_domains(force_refresh=True)
         return render_template('index.html', domains=domains, error='Invalid domain selection.', accounts=session.get('accounts', []), active_email=session.get('active_email'))
 
     provider_id, domain = selected_domain.split('::', 1)
-    provider_id = normalize_provider(provider_id)
+    provider_id = provider_id.strip()
+    if provider_id not in MAIL_PROVIDERS:
+        domains = get_combined_domains(force_refresh=True)
+        return render_template('index.html', domains=domains, error='Invalid provider selection. Refresh and choose a domain again.', accounts=session.get('accounts', []), active_email=session.get('active_email'))
 
     username = request.form.get('username', '').strip()
     password = secrets.token_urlsafe(12)
@@ -895,5 +912,18 @@ def logout():
     session.clear()
     return redirect(url_for('index'))
 
+
+def log_startup_domains():
+    """Print resolved domains at startup so deployments can be verified quickly."""
+    try:
+        domains = get_combined_domains(force_refresh=True)
+        print(f"[startup] loaded domains: {len(domains)}")
+        for item in domains:
+            print(f"[startup] {item.get('provider')} -> {item.get('domain')}")
+    except Exception as exc:
+        print(f"[startup] failed to load domains: {exc}")
+
 if __name__ == '__main__':
+    if os.getenv('LOG_STARTUP_DOMAINS', '1') == '1':
+        log_startup_domains()
     app.run(debug=True)
