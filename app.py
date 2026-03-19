@@ -82,6 +82,28 @@ def get_domain_value(domain_obj):
 
     return str(domain_obj)
 
+
+def normalize_selected_domain(selected_domain):
+    """Normalize submitted domain value to a provider::domain string."""
+    if isinstance(selected_domain, dict):
+        selected_domain = selected_domain.get('value', '')
+
+    if isinstance(selected_domain, str):
+        raw = selected_domain.strip()
+        if raw.startswith('{') and raw.endswith('}'):
+            try:
+                parsed = ast.literal_eval(raw)
+                if isinstance(parsed, dict):
+                    value = parsed.get('value')
+                    if isinstance(value, str):
+                        return value.strip()
+            except Exception:
+                pass
+        return raw
+
+    return str(selected_domain or '').strip()
+
+
 app.jinja_env.filters['domain_label'] = get_domain_label
 app.jinja_env.filters['domain_value'] = get_domain_value
 
@@ -740,7 +762,7 @@ def create_account_json():
         remaining_wait = ACCOUNT_CREATION_COOLDOWN - time_since_last_creation
         return jsonify({'success': False, 'error': f'Please wait {int(remaining_wait) + 1}s before creating another account.'}), 429
 
-    selected_domain = request.form.get('domain', '')
+    selected_domain = normalize_selected_domain(request.form.get('domain', ''))
     if '::' not in selected_domain:
         return jsonify({'success': False, 'error': 'Invalid domain selection.'}), 400
 
@@ -819,7 +841,7 @@ def create_account():
         domains = get_combined_domains()
         return render_template('index.html', domains=domains, error=error_msg, accounts=session.get('accounts', []), active_email=session.get('active_email'))
 
-    selected_domain = request.form.get('domain', '')
+    selected_domain = normalize_selected_domain(request.form.get('domain', ''))
     if '::' not in selected_domain:
         domains = get_combined_domains(force_refresh=True)
         return render_template('index.html', domains=domains, error='Invalid domain selection.', accounts=session.get('accounts', []), active_email=session.get('active_email'))
@@ -979,4 +1001,6 @@ def log_startup_domains():
 if __name__ == '__main__':
     if os.getenv('LOG_STARTUP_DOMAINS', '1') == '1':
         log_startup_domains()
-    app.run(debug=True)
+    port = int(os.getenv('PORT', '5000'))
+    debug = os.getenv('FLASK_DEBUG', '0') == '1'
+    app.run(host='0.0.0.0', port=port, debug=debug)
