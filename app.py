@@ -153,6 +153,80 @@ def normalize_selected_domain(selected_domain):
     return str(selected_domain or '').strip()
 
 
+def parse_dictish(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith('{') and raw.endswith('}'):
+            try:
+                parsed = ast.literal_eval(raw)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return None
+    return None
+
+
+def extract_domain_text(value):
+    text = str(value or '').strip()
+    match = re.search(r"([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)", text)
+    return match.group(1) if match else ''
+
+
+def sanitize_domain_option(raw_option):
+    """Return a clean {value, label, domain, provider, provider_name} dict for template rendering."""
+    payload = parse_dictish(raw_option)
+
+    provider = ''
+    domain = ''
+
+    if payload:
+        nested = (
+            parse_dictish(payload.get('value'))
+            or parse_dictish(payload.get('domain'))
+            or parse_dictish(payload.get('label'))
+        )
+        if nested:
+            payload = nested
+
+        provider = str(payload.get('provider') or '').strip()
+        value = payload.get('value')
+
+        if isinstance(value, str) and '::' in value:
+            p, d = value.split('::', 1)
+            provider = p.strip() or provider
+            domain = d.strip()
+
+        if not domain:
+            domain = str(payload.get('domain') or '').strip()
+        if not domain:
+            domain = extract_domain_text(payload.get('label'))
+    else:
+        raw_text = str(raw_option or '').strip()
+        if '::' in raw_text:
+            p, d = raw_text.split('::', 1)
+            provider = p.strip()
+            domain = d.strip()
+        else:
+            domain = extract_domain_text(raw_text)
+            provider = 'mailinator' if 'mailinator' in raw_text.lower() else 'mailtm'
+
+    domain = extract_domain_text(domain)
+    if not domain:
+        return None
+
+    provider = normalize_provider(provider or 'mailtm')
+    provider_display = provider_name(provider)
+    return {
+        'value': f"{provider}::{domain}",
+        'domain': domain,
+        'provider': provider,
+        'provider_name': provider_display,
+        'label': f"{domain} ({provider_display})",
+    }
+
+
 app.jinja_env.filters['domain_label'] = get_domain_label
 app.jinja_env.filters['domain_value'] = get_domain_value
 
@@ -339,6 +413,7 @@ DOMAIN_CACHE = {
     'expires_at': 0,
     'data': [],
 }
+UNIFIED_INBOX_LIVE_FETCH_LIMIT = int(os.getenv('UNIFIED_INBOX_LIVE_FETCH_LIMIT', '4'))
 
 
 def extract_otp(text):
@@ -713,7 +788,22 @@ def get_combined_domains(force_refresh=False):
 
 @app.route('/')
 def index():
-    domains = get_combined_domains()
+    # Render performs frequent HEAD checks; skip expensive inbox aggregation for those.
+    if request.method == 'HEAD':
+        return ('', 200)
+
+    raw_domains = get_combined_domains()
+    domains = []
+    seen_domain_values = set()
+    for item in raw_domains:
+        clean = sanitize_domain_option(item)
+        if not clean:
+            continue
+        key = clean['value']
+        if key in seen_domain_values:
+            continue
+        seen_domain_values.add(key)
+        domains.append(clean)
     just_created = request.args.get('created') == '1'
     account_exists_notice = request.args.get('exists') == '1'
     error = None
@@ -778,17 +868,24 @@ def index():
 
     messages = []
 
-    accounts_to_fetch = session.get('accounts', [])
+    # Unified inbox mode: fetch newest accounts first.
+    accounts_to_fetch = list(reversed(session.get('accounts', [])))
     if just_created:
         # Prioritize immediate sidebar/account rendering after create.
         accounts_to_fetch = []
 
     # Show all messages from all accounts together, but keep the active account selected in the sidebar.
-    for account in accounts_to_fetch:
+    for idx, account in enumerate(accounts_to_fetch):
         account_email = account['email']
         account_provider = normalize_provider(account.get('provider'))
         cache_key = account_cache_key(account_provider, account_email)
         cached_msgs = MESSAGE_CACHE.get(cache_key, [])
+
+        # Keep first paint fast: refresh only a limited number of accounts per request,
+        # and use cached messages for the rest.
+        if idx >= UNIFIED_INBOX_LIVE_FETCH_LIMIT:
+            messages.extend(cached_msgs)
+            continue
 
         mail = MailProvider(account_provider)
 
