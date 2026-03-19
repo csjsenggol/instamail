@@ -792,6 +792,28 @@ def index():
     if request.method == 'HEAD':
         return ('', 200)
 
+    # Keep public URL clean: consume query params into session, then redirect to '/'.
+    if request.args:
+        active_arg = request.args.get('active')
+        if active_arg:
+            session['active_email'] = active_arg
+
+        page_arg = request.args.get('page', type=int)
+        if page_arg and page_arg > 0:
+            session['page'] = page_arg
+
+        account_page_arg = request.args.get('account_page', type=int)
+        if account_page_arg and account_page_arg > 0:
+            session['account_page'] = account_page_arg
+
+        if request.args.get('created') == '1':
+            session['just_created'] = True
+        if request.args.get('exists') == '1':
+            session['account_exists_notice'] = True
+
+        session.modified = True
+        return redirect(url_for('index'))
+
     raw_domains = get_combined_domains()
     domains = []
     seen_domain_values = set()
@@ -804,8 +826,8 @@ def index():
             continue
         seen_domain_values.add(key)
         domains.append(clean)
-    just_created = request.args.get('created') == '1'
-    account_exists_notice = request.args.get('exists') == '1'
+    just_created = bool(session.pop('just_created', False))
+    account_exists_notice = bool(session.pop('account_exists_notice', False))
     error = None
     # Unified mode: always aggregate all accounts in one inbox view.
     inbox_scope = 'all'
@@ -825,11 +847,6 @@ def index():
     if 'active_email' not in session and session.get('accounts'):
         session['active_email'] = session['accounts'][0]['email']
 
-    # allow switching active account via query param
-    active = request.args.get('active')
-    if active:
-        session['active_email'] = active
-
     account_emails = {a['email'] for a in session.get('accounts', []) if isinstance(a, dict) and a.get('email')}
     if session.get('active_email') and session['active_email'] not in account_emails:
         session['active_email'] = session['accounts'][0]['email'] if session.get('accounts') else None
@@ -847,11 +864,14 @@ def index():
     account_per_page = 100
     account_total = len(all_accounts)
     account_total_pages = max(1, math.ceil(account_total / account_per_page))
-    account_page = request.args.get('account_page', default=1, type=int)
+    account_page = session.get('account_page', 1)
+    if not isinstance(account_page, int):
+        account_page = 1
     if account_page < 1:
         account_page = 1
     if account_page > account_total_pages:
         account_page = account_total_pages
+    session['account_page'] = account_page
 
     account_start_idx = (account_page - 1) * account_per_page
     account_end_idx = account_start_idx + account_per_page
@@ -956,11 +976,14 @@ def index():
     per_page = 100
     total_messages = len(messages)
     total_pages = max(1, math.ceil(total_messages / per_page))
-    page = request.args.get('page', default=1, type=int)
+    page = session.get('page', 1)
+    if not isinstance(page, int):
+        page = 1
     if page < 1:
         page = 1
     if page > total_pages:
         page = total_pages
+    session['page'] = page
 
     start_idx = (page - 1) * per_page
     end_idx = start_idx + per_page
@@ -1114,15 +1137,9 @@ def create_account():
             latest_accounts.append({'email': email, 'password': password, 'provider': provider_id})
         else:
             session['active_email'] = email
+            session['account_exists_notice'] = True
             session.modified = True
-            return redirect(
-                url_for(
-                    'index',
-                    active=email,
-                    scope='active',
-                    exists=1,
-                )
-            )
+            return redirect(url_for('index'))
 
         session_accounts = session.get('accounts', [])
         session['accounts'] = merge_account_lists(latest_accounts, session_accounts)
@@ -1137,7 +1154,9 @@ def create_account():
         )
         save_account(email, password, provider_id)
 
-        return redirect(url_for('index', created=1))
+        session['just_created'] = True
+        session.modified = True
+        return redirect(url_for('index'))
     elif status_code == 400:
         error_msg = "Invalid email address or account already exists. Please try a different username."
     elif status_code == 422:
