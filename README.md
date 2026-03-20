@@ -1,6 +1,6 @@
 # Instamail Web App
 
-A Flask web application for creating and managing temporary email accounts using Mail.tm and Mailinator APIs.
+A Flask web application for creating and managing temporary email accounts using Mail.tm API.
 
 ## Setup
 
@@ -18,24 +18,14 @@ A Flask web application for creating and managing temporary email accounts using
 
 ## Features
 
-- Create temporary email accounts
+- Create temporary email accounts using Mail.tm
 - View incoming messages
-- Multi-provider domain support (Mail.tm + Mailinator)
+- Delete messages
 - Shared account persistence using SQLite (`accounts.db`)
-- Simple web interface
+- Simple dark-themed web interface
 
-## Note
+## Configuration
 
-This app uses Mail.tm (primary) and Mailinator (public inbox) services.
-
-Mailinator notes:
-- Public inboxes are mailbox-on-demand (no explicit account creation).
-- Message deletion is not supported in this app flow for public inboxes.
-- Optionally set `MAILINATOR_API_KEY` for higher API access limits.
-- Optional domains env: `MAILINATOR_DOMAINS` (default: `mailinator.com`).
-
-Addy.io note:
-- Addy.io is an alias-forwarding service and does not provide the same in-app inbox retrieval flow used here.
-- It is not integrated as an inbox provider in this app.
+This app uses Mail.tm API for account creation and email management.
 
 For production on Render, attach a persistent disk and set `ACCOUNTS_DB_PATH` (example: `/var/data/accounts.db`) so account data survives deploys/restarts.

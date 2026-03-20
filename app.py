@@ -111,13 +111,11 @@ def get_domain_value(domain_obj):
             if '::' in clean_value:
                 return clean_value
 
-        provider = payload.get('provider')
         domain = payload.get('domain')
-        if isinstance(provider, str) and isinstance(domain, str):
-            clean_provider = provider.strip()
+        if isinstance(domain, str):
             clean_domain = domain.strip()
-            if clean_provider and clean_domain:
-                return f"{clean_provider}::{clean_domain}"
+            if clean_domain:
+                return f"mailtm::{clean_domain}"
 
     raw = str(domain_obj).strip()
     explicit_match = re.search(r"([a-zA-Z0-9_-]+)::([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)", raw)
@@ -126,8 +124,7 @@ def get_domain_value(domain_obj):
 
     domain_match = re.search(r"([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)", raw)
     if domain_match:
-        inferred_provider = 'mailinator' if 'mailinator' in raw.lower() else 'mailtm'
-        return f"{inferred_provider}::{domain_match.group(1)}"
+        return f"mailtm::{domain_match.group(1)}"
 
     return raw
 
@@ -210,7 +207,7 @@ def sanitize_domain_option(raw_option):
             domain = d.strip()
         else:
             domain = extract_domain_text(raw_text)
-            provider = 'mailinator' if 'mailinator' in raw_text.lower() else 'mailtm'
+            provider = 'mailtm'
 
     domain = extract_domain_text(domain)
     if not domain:
@@ -244,11 +241,6 @@ MAIL_PROVIDERS = {
         'name': 'Mail.tm',
         'base_url': 'https://api.mail.tm',
         'type': 'hydra',
-    },
-    'mailinator': {
-        'name': 'Mailinator',
-        'base_url': 'https://api.mailinator.com/v2',
-        'type': 'mailinator',
     },
 }
 
@@ -489,86 +481,10 @@ class MailProvider:
         self.provider_id = normalize_provider(provider_id)
         self.config = MAIL_PROVIDERS[self.provider_id]
         self.base_url = self.config['base_url']
-        self.provider_type = self.config.get('type', 'hydra')
         self.session = requests.Session()
 
-    def _parse_email(self, email):
-        if not email or '@' not in email:
-            return None, None
-        local, domain = email.split('@', 1)
-        return local, domain
-
-    def _mailinator_domain_key(self, domain):
-        # Public mailinator.com inboxes use the special domain key "public".
-        return 'public' if (domain or '').lower() == 'mailinator.com' else (domain or '')
-
-    def _mailinator_params(self):
-        token = os.getenv('MAILINATOR_API_KEY', '').strip()
-        return {'token': token} if token else {}
-
     def get_domains(self):
-        """Fetch the list of active domains."""
-        if self.provider_type == 'mailinator':
-            raw = os.getenv('MAILINATOR_DOMAINS', 'mailinator.com').strip()
-
-            def extract_domain(entry):
-                if isinstance(entry, dict):
-                    domain = entry.get('domain')
-                    if isinstance(domain, str) and domain.strip():
-                        return domain.strip()
-
-                    value = entry.get('value')
-                    if isinstance(value, str) and '::' in value:
-                        return value.split('::', 1)[1].strip()
-                    return None
-
-                if isinstance(entry, str):
-                    candidate = entry.strip().strip('"').strip("'")
-                    if not candidate:
-                        return None
-                    if '::' in candidate:
-                        return candidate.split('::', 1)[1].strip()
-                    return candidate
-
-                return None
-
-            parsed_domains = []
-
-            # Support env values like:
-            # - mailinator.com,mailinator.us
-            # - [{"domain": "mailinator.com"}]
-            # - {"value": "mailinator::mailinator.com", "domain": "mailinator.com"}
-            if raw.startswith('[') or raw.startswith('{'):
-                try:
-                    parsed = ast.literal_eval(raw)
-                    if isinstance(parsed, list):
-                        for item in parsed:
-                            domain = extract_domain(item)
-                            if domain:
-                                parsed_domains.append(domain)
-                    else:
-                        domain = extract_domain(parsed)
-                        if domain:
-                            parsed_domains.append(domain)
-                except Exception:
-                    # Fall back to CSV parsing for malformed literals.
-                    pass
-
-            if not parsed_domains:
-                for item in raw.split(','):
-                    domain = extract_domain(item)
-                    if domain:
-                        parsed_domains.append(domain)
-
-            seen = set()
-            unique_domains = []
-            for d in parsed_domains:
-                if d not in seen:
-                    seen.add(d)
-                    unique_domains.append(d)
-
-            return unique_domains or ['mailinator.com']
-
+        """Fetch the list of active domains from Mail.tm."""
         response = self.session.get(f"{self.base_url}/domains", timeout=10)
         if response.status_code != 200:
             return []
@@ -576,24 +492,13 @@ class MailProvider:
         return [d.get('domain') for d in data if isinstance(d, dict) and d.get('domain')]
 
     def create_account(self, email, password):
-        """Create account and return (success, status_code, actual_email)."""
-        if self.provider_type == 'mailinator':
-            local, domain = self._parse_email(email)
-            allowed_domains = set(self.get_domains())
-            if not local or not domain or domain not in allowed_domains:
-                return False, 422, None
-            # Mailinator public inboxes are mailbox-on-demand.
-            return True, 201, None
-
+        """Create account on Mail.tm and return (success, status_code, actual_email)."""
         data = {"address": email, "password": password}
         response = self.session.post(f"{self.base_url}/accounts", json=data, timeout=10)
         return response.status_code == 201, response.status_code, None
 
     def get_token(self, email, password):
         """Login to get the Bearer token (required for reading mail)."""
-        if self.provider_type == 'mailinator':
-            return email
-
         data = {"address": email, "password": password}
         response = self.session.post(f"{self.base_url}/token", json=data, timeout=10)
         if response.status_code == 200:
@@ -601,61 +506,7 @@ class MailProvider:
         return None
 
     def get_messages(self, token):
-        """Fetch all messages for the account."""
-        if self.provider_type == 'mailinator':
-            local, domain = self._parse_email(token)
-            if not local or not domain:
-                return []
-
-            domain_key = self._mailinator_domain_key(domain)
-            response = self.session.get(
-                f"{self.base_url}/domains/{domain_key}/inboxes/{local}",
-                params=self._mailinator_params(),
-                timeout=10,
-            )
-            if response.status_code != 200:
-                return []
-
-            payload = response.json() if isinstance(response.json(), dict) else {}
-            raw_msgs = payload.get('msgs', [])
-            normalized = []
-            for msg in raw_msgs:
-                if not isinstance(msg, dict):
-                    continue
-
-                sender = msg.get('from') or msg.get('fromfull') or ''
-                subject = msg.get('subject') or '(No subject)'
-                msg_id = msg.get('id') or msg.get('msgid')
-                created_raw = msg.get('time')
-
-                created_at = None
-                try:
-                    if created_raw is not None:
-                        ts = int(created_raw)
-                        if ts > 9999999999:
-                            ts = ts / 1000.0
-                        created_at = datetime.datetime.utcfromtimestamp(ts).isoformat()
-                except Exception:
-                    created_at = str(created_raw) if created_raw is not None else None
-
-                normalized.append(
-                    {
-                        'id': msg_id,
-                        'subject': subject,
-                        'createdAt': created_at,
-                        'intro': msg.get('intro', ''),
-                        'text': '',
-                        'html': '',
-                        'from': {
-                            'address': sender,
-                            'name': sender,
-                        },
-                        'to': [{'address': token}],
-                    }
-                )
-
-            return normalized
-
+        """Fetch all messages for the account from Mail.tm."""
         headers = {"Authorization": f"Bearer {token}"}
         response = self.session.get(f"{self.base_url}/messages", headers=headers, timeout=10)
         if response.status_code != 200:
@@ -663,71 +514,7 @@ class MailProvider:
         return response.json().get('hydra:member', [])
 
     def get_message(self, token, message_id):
-        """Fetch a single message by ID."""
-        if self.provider_type == 'mailinator':
-            local, domain = self._parse_email(token)
-            if not local or not domain:
-                return None
-
-            domain_key = self._mailinator_domain_key(domain)
-            response = self.session.get(
-                f"{self.base_url}/domains/{domain_key}/inboxes/{local}/messages/{message_id}",
-                params=self._mailinator_params(),
-                timeout=10,
-            )
-            if response.status_code != 200:
-                return None
-
-            payload = response.json() if isinstance(response.json(), dict) else {}
-            data = payload.get('data', payload)
-            if not isinstance(data, dict):
-                return None
-
-            parts = data.get('parts', [])
-            text_body = ''
-            html_body = ''
-            if isinstance(parts, list):
-                for part in parts:
-                    if not isinstance(part, dict):
-                        continue
-                    body = part.get('body') or ''
-                    content_type = (part.get('headers', {}).get('content-type') or '').lower()
-                    if 'html' in content_type and not html_body:
-                        html_body = body
-                    elif 'text/plain' in content_type and not text_body:
-                        text_body = body
-
-            if not text_body:
-                text_body = data.get('text', '') or data.get('subject', '')
-            if not html_body:
-                html_body = data.get('html', '')
-
-            created_raw = data.get('time')
-            created_at = None
-            try:
-                if created_raw is not None:
-                    ts = int(created_raw)
-                    if ts > 9999999999:
-                        ts = ts / 1000.0
-                    created_at = datetime.datetime.utcfromtimestamp(ts).isoformat()
-            except Exception:
-                created_at = str(created_raw) if created_raw is not None else None
-
-            sender = data.get('from') or data.get('fromfull') or ''
-            return {
-                'id': data.get('id') or message_id,
-                'subject': data.get('subject') or '(No subject)',
-                'createdAt': created_at,
-                'intro': '',
-                'text': text_body,
-                'html': html_body,
-                'from': {
-                    'address': sender,
-                    'name': sender,
-                },
-                'to': [{'address': token}],
-            }
-
+        """Fetch a single message by ID from Mail.tm."""
         headers = {"Authorization": f"Bearer {token}"}
         response = self.session.get(f"{self.base_url}/messages/{message_id}", headers=headers, timeout=10)
         if response.status_code == 200:
@@ -735,11 +522,7 @@ class MailProvider:
         return None
 
     def delete_message(self, token, message_id):
-        """Delete a message by ID."""
-        if self.provider_type == 'mailinator':
-            # Public Mailinator inbox messages cannot be reliably deleted via this app flow.
-            return False
-
+        """Delete a message by ID from Mail.tm."""
         headers = {"Authorization": f"Bearer {token}"}
         response = self.session.delete(f"{self.base_url}/messages/{message_id}", headers=headers, timeout=10)
         return response.status_code == 204
@@ -1360,6 +1143,7 @@ def log_startup_domains():
 if __name__ == '__main__':
     if os.getenv('LOG_STARTUP_DOMAINS', '1') == '1':
         log_startup_domains()
+    DOMAIN_CACHE.clear()
     port = int(os.getenv('PORT', '5000'))
     debug = os.getenv('FLASK_DEBUG', '0') == '1'
     app.run(host='0.0.0.0', port=port, debug=debug)
