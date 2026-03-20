@@ -1255,7 +1255,54 @@ def remove_account():
     session.modified = True
     return redirect(url_for('index'))
 
-@app.route('/message/<message_id>')
+
+@app.route('/accounts/remove-bulk', methods=['POST'])
+def remove_accounts_bulk():
+    """Remove one or more email accounts selected via checkboxes (value format: provider|email)."""
+    refs = request.form.getlist('account_refs')
+    if not refs:
+        return redirect(url_for('index'))
+
+    to_remove = []
+    for ref in refs:
+        if '|' not in ref:
+            continue
+        provider_id, email = ref.split('|', 1)
+        email = email.strip()
+        provider_id = normalize_provider(provider_id.strip())
+        if email:
+            to_remove.append((provider_id, email))
+
+    if not to_remove:
+        return redirect(url_for('index'))
+
+    global PERSISTENT_ACCOUNTS
+    remove_set = set(to_remove)
+
+    session_accounts = session.get('accounts', [])
+    session['accounts'] = [
+        a for a in session_accounts
+        if (normalize_provider(a.get('provider')), a.get('email')) not in remove_set
+    ]
+
+    PERSISTENT_ACCOUNTS = [
+        a for a in PERSISTENT_ACCOUNTS
+        if (normalize_provider(a.get('provider')), a.get('email')) not in remove_set
+    ]
+
+    active_email = session.get('active_email')
+    removed_emails = {email for _, email in remove_set}
+    if active_email in removed_emails:
+        remaining = session.get('accounts', [])
+        session['active_email'] = remaining[0]['email'] if remaining else None
+
+    for provider_id, email in remove_set:
+        cache_key = account_cache_key(provider_id, email)
+        MESSAGE_CACHE.pop(cache_key, None)
+        delete_account(email, provider_id)
+
+    session.modified = True
+    return redirect(url_for('index'))
 def view_message(message_id):
     active_email = session.get('active_email')
     if not active_email:
